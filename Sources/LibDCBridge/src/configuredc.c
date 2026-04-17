@@ -172,11 +172,12 @@ static dc_status_t ble_stream_sleep(dc_iostream_t *iostream, unsigned int millis
  *------------------------------------------------------------------*/
 static dc_status_t ble_stream_close(dc_iostream_t *iostream)
 {
-    printf("DC_IO [CLOSE]\n");
     ble_stream_t *s = (ble_stream_t *) iostream;
     dc_status_t rc = ble_close(s->ble_object);
     freeBLEObject(s->ble_object);
-    free(s);
+    // Do NOT free(s) here — dc_iostream_close calls dc_iostream_deallocate
+    // after this vtable close returns, which frees the iostream memory.
+    // Freeing here causes a double-free crash (POINTER_BEING_FREED_WAS_NOT_ALLOCATED).
     return rc;
 }
 
