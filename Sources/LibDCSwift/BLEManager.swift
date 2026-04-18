@@ -230,7 +230,10 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     @objc public func write(_ data: Data!) -> Bool {
         guard let peripheral = self.peripheral,
               let characteristic = self.writeCharacteristic else { return false }
-        peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
+        let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.writeWithoutResponse)
+            ? .withoutResponse
+            : .withResponse
+        peripheral.writeValue(data, for: characteristic, type: writeType)
         return true
     }
     
