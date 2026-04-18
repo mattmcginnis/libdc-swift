@@ -940,6 +940,17 @@ oceanic_atom2_device_open (dc_device_t **out, dc_context_t *context, dc_iostream
 	// Make sure everything is in a sane state.
 	dc_iostream_purge (device->iostream, DC_DIRECTION_ALL);
 
+	// For BLE, send the passphrase handshake first to put the device into
+	// PC/download mode before issuing the version command. Over serial/USB,
+	// connecting the cable activates PC mode automatically so the handshake
+	// is not needed at this stage.
+	if (dc_iostream_get_transport (device->iostream) == DC_TRANSPORT_BLE) {
+		status = oceanic_atom2_ble_handshake(device);
+		if (status != DC_STATUS_SUCCESS) {
+			goto error_free;
+		}
+	}
+
 	// Switch the device from surface mode into download mode. Before sending
 	// this command, the device needs to be in PC mode (automatically activated
 	// by connecting the device), or already in download mode.
@@ -949,13 +960,6 @@ oceanic_atom2_device_open (dc_device_t **out, dc_context_t *context, dc_iostream
 	}
 
 	HEXDUMP (context, DC_LOGLEVEL_DEBUG, "Version", device->base.version, sizeof (device->base.version));
-
-	if (dc_iostream_get_transport (device->iostream) == DC_TRANSPORT_BLE) {
-		status = oceanic_atom2_ble_handshake(device);
-		if (status != DC_STATUS_SUCCESS) {
-			goto error_free;
-		}
-	}
 
 	// Detect the memory layout.
 	const oceanic_common_version_t *version = OCEANIC_COMMON_MATCH(device->base.version, versions, &device->base.firmware);

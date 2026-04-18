@@ -88,7 +88,25 @@ dc_status_t ble_set_timeout(ble_object_t *io, int timeout) {
     return DC_STATUS_SUCCESS;
 }
 
-dc_status_t ble_ioctl(ble_object_t *io, unsigned int request, void *data, size_t size) {
+dc_status_t ble_ioctl(ble_object_t *io, unsigned int request, void *data_, size_t size_) {
+    // DC_IOCTL_BLE_GET_NAME: return the connected peripheral's BLE name.
+    // type='b', nr=0 — used by oceanic_atom2 handshake to build its passphrase.
+    unsigned int type = (request >>  8) & 0xFF;
+    unsigned int nr   = (request >>  0) & 0xFF;
+    if (type == 'b' && nr == 0) {
+        Class cls = NSClassFromString(@"CoreBluetoothManager");
+        id<CoreBluetoothManagerProtocol> mgr = [cls shared];
+        NSString *name = nil;
+        if ([mgr respondsToSelector:@selector(connectedDevice)]) {
+            name = [(id)mgr connectedDevice].name;
+        }
+        if (!name) return DC_STATUS_UNAVAILABLE;
+        const char *cname = [name UTF8String];
+        size_t len = strlen(cname);
+        if (len + 1 > size_) return DC_STATUS_INVALIDARGS;
+        memcpy(data_, cname, len + 1);
+        return DC_STATUS_SUCCESS;
+    }
     return DC_STATUS_UNSUPPORTED;
 }
 
