@@ -82,6 +82,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     private var averageTransferRate: Double = 0
     private var preferredService: CBService?
     private var pendingOperations: [() -> Void] = []
+    private var advertisedServiceUUIDs: [UUID: [CBUUID]] = [:]
     
     // MARK: - Public Properties
     public var openedDeviceDataPtr: UnsafeMutablePointer<device_data_t>? { // Public access to device data pointer with change notification
@@ -147,10 +148,20 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             return false
         }
         
-        peripheral.discoverServices(nil)
-        
+        // Use advertised service UUIDs for targeted discovery if available,
+        // otherwise fall back to discovering all services.
+        let targetUUIDs: [CBUUID]? = {
+            let advertised = advertisedServiceUUIDs[peripheral.identifier] ?? []
+            let known = advertised.filter { isKnownSerialService($0) != nil }
+            return known.isEmpty ? nil : known
+        }()
+        if let uuids = targetUUIDs {
+            logInfo("Targeted service discovery: \(uuids.map { $0.uuidString })")
+        }
+        peripheral.discoverServices(targetUUIDs)
+
         // Wait for characteristics with timeout
-        let timeout = Date(timeIntervalSinceNow: 5.0)
+        let timeout = Date(timeIntervalSinceNow: 10.0)
         while writeCharacteristic == nil || notifyCharacteristic == nil {
             if Date() > timeout {
                 logError("Timeout waiting for service discovery")
@@ -486,15 +497,18 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     
     public func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
         if peripheral.name != nil {
-            // Add the peripheral if:
-            // 1. It's a stored device
-            // 2. It's a supported device
-            // 3. We haven't already added it
+            if let uuids = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID], !uuids.isEmpty {
+                advertisedServiceUUIDs[peripheral.identifier] = uuids
+            }
             if DeviceStorage.shared.getStoredDevice(uuid: peripheral.identifier.uuidString) != nil ||
                DeviceConfiguration.fromName(peripheral.name ?? "") != nil {
                 addDiscoveredPeripheral(peripheral)
             }
         }
+    }
+
+    public func advertisedServiceUUIDs(for peripheralID: UUID) -> [CBUUID] {
+        return advertisedServiceUUIDs[peripheralID] ?? []
     }
 
     // MARK: - CBPeripheral Methods
@@ -528,17 +542,26 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             logError("Error discovering characteristics: \(error.localizedDescription)")
             return
         }
-        
+
         guard let characteristics = service.characteristics else {
             logWarning("No characteristics found for service: \(service.uuid)")
             return
         }
-        
+
+        // When a preferred known serial service was identified, skip all other services
+        // to avoid wrong characteristics from generic services (e.g. Device Information)
+        // overwriting the correct ones.
+        if let preferred = preferredService, service.uuid != preferred.uuid {
+            logInfo("Skipping non-preferred service \(service.uuid.uuidString)")
+            return
+        }
+
+        logInfo("Using characteristics from service \(service.uuid.uuidString)")
         for characteristic in characteristics {
             if isWriteCharacteristic(characteristic) {
                 writeCharacteristic = characteristic
             }
-            
+
             if isReadCharacteristic(characteristic) {
                 notifyCharacteristic = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
