@@ -235,9 +235,10 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     @objc public func write(_ data: Data!) -> Bool {
         guard let peripheral = self.peripheral,
               let characteristic = self.writeCharacteristic else { return false }
-        let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.writeWithoutResponse)
-            ? .withoutResponse
-            : .withResponse
+        let hasNoRsp = characteristic.properties.contains(.writeWithoutResponse)
+        let writeType: CBCharacteristicWriteType = hasNoRsp ? .withoutResponse : .withResponse
+        let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+        logInfo("write \(data.count)b type=\(hasNoRsp ? "noRsp" : "withRsp") char=\(characteristic.uuid.uuidString): \(hex)")
         peripheral.writeValue(data, for: characteristic, type: writeType)
         return true
     }
@@ -574,12 +575,23 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
 
         logInfo("Using characteristics from service \(service.uuid.uuidString)")
         for characteristic in characteristics {
+            let props = characteristic.properties
+            var propStrs: [String] = []
+            if props.contains(.read) { propStrs.append("read") }
+            if props.contains(.write) { propStrs.append("write") }
+            if props.contains(.writeWithoutResponse) { propStrs.append("writeNoRsp") }
+            if props.contains(.notify) { propStrs.append("notify") }
+            if props.contains(.indicate) { propStrs.append("indicate") }
+            logInfo("  char \(characteristic.uuid.uuidString): [\(propStrs.joined(separator: ","))]")
+
             if isWriteCharacteristic(characteristic) {
                 writeCharacteristic = characteristic
+                logInfo("  → writeCharacteristic = \(characteristic.uuid.uuidString)")
             }
 
             if isReadCharacteristic(characteristic) {
                 notifyCharacteristic = characteristic
+                logInfo("  → notifyCharacteristic = \(characteristic.uuid.uuidString)")
                 peripheral.setNotifyValue(true, for: characteristic)
             }
         }
@@ -608,7 +620,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
 
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            logError("Error writing to characteristic: \(error.localizedDescription)")
+            logError("Error writing to characteristic: \(error.localizedDescription) (code=\((error as NSError).code) domain=\((error as NSError).domain))")
         }
     }
 
