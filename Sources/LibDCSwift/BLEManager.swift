@@ -83,6 +83,8 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     private var preferredService: CBService?
     private var pendingOperations: [() -> Void] = []
     private var advertisedServiceUUIDs: [UUID: [CBUUID]] = [:]
+    private var lastCloseTime: Date? = nil
+    private let reconnectCooldown: TimeInterval = 3.0
     
     // MARK: - Public Properties
     public var openedDeviceDataPtr: UnsafeMutablePointer<device_data_t>? { // Public access to device data pointer with change notification
@@ -301,6 +303,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     // MARK: - Device Management
     @objc public func close(clearDevicePtr: Bool = false) {
         logInfo("close: called clearDevicePtr=\(clearDevicePtr) peripheral=\(peripheral?.name ?? "nil") state=\(peripheral?.state.rawValue ?? -1)")
+        lastCloseTime = Date()
         isDisconnecting = true
         DispatchQueue.main.async {
             self.isPeripheralReady = false
@@ -353,6 +356,14 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     }
     
     @objc public func connect(toDevice address: String!) -> Bool {
+        if let lastClose = lastCloseTime {
+            let elapsed = Date().timeIntervalSince(lastClose)
+            if elapsed < reconnectCooldown {
+                logError("connect(toDevice:): BLOCKED — \(String(format: "%.2f", elapsed))s since last close, cooldown is \(reconnectCooldown)s. Protecting device from rapid reconnect.")
+                return false
+            }
+        }
+
         guard let uuid = UUID(uuidString: address),
               let peripheral = centralManager.retrievePeripherals(withIdentifiers: [uuid]).first else {
             logError("connect(toDevice:): no peripheral found for address=\(address ?? "nil")")

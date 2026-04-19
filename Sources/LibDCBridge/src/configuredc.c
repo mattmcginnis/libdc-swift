@@ -655,15 +655,24 @@ dc_status_t open_ble_device_with_identification(device_data_t **out_data,
             *out_data = data;
             return DC_STATUS_SUCCESS;
         }
+        // DC_STATUS_IO means the device connected but didn't respond (timeout).
+        // Retrying immediately would hit the device again while it's still in a
+        // half-open state from the first attempt — this can brick some dive computers
+        // (all LCD segments lit, requires battery removal). Bail out immediately.
+        if (rc == DC_STATUS_IO || rc == DC_STATUS_TIMEOUT) {
+            free(data);
+            return rc;
+        }
+        // Other errors (e.g. descriptor not found): fall through to name-based detection.
     }
-    
+
     // Fall back to identification if stored config failed or wasn't provided
     rc = get_device_info_from_name(name, &family, &model);
     if (rc != DC_STATUS_SUCCESS) {
         free(data);
         return rc;
     }
-    
+
     rc = open_ble_device(data, address, family, model);
     if (rc != DC_STATUS_SUCCESS) {
         free(data);
