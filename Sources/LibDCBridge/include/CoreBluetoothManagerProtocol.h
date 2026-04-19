@@ -14,6 +14,7 @@
 - (BOOL)writeData:(NSData *)data;
 - (NSData *)readDataPartial:(int)requested;
 - (void)close;
+- (void)bleLog:(NSString *)message;
 @end
 
 #else

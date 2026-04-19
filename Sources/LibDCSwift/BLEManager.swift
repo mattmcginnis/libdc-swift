@@ -160,22 +160,25 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             let known = advertised.filter { isKnownSerialService($0) != nil }
             return known.isEmpty ? nil : known
         }()
-        if let uuids = targetUUIDs {
-            logInfo("Targeted service discovery: \(uuids.map { $0.uuidString })")
-        }
+        logInfo("discoverServices: peripheral=\(peripheral.name ?? "?") state=\(peripheral.state.rawValue) targetUUIDs=\(targetUUIDs?.map { $0.uuidString } ?? ["nil — discovering all"])")
         peripheral.discoverServices(targetUUIDs)
 
-        // Wait for characteristics with timeout
         let timeout = Date(timeIntervalSinceNow: 10.0)
+        var lastLog = Date()
         while writeCharacteristic == nil || notifyCharacteristic == nil {
             if Date() > timeout {
-                logError("Timeout waiting for service discovery")
+                logError("discoverServices: TIMEOUT (10s) — writeChar=\(writeCharacteristic?.uuid.uuidString ?? "nil") notifyChar=\(notifyCharacteristic?.uuid.uuidString ?? "nil")")
                 return false
+            }
+            if Date().timeIntervalSince(lastLog) >= 1.0 {
+                logInfo("discoverServices: waiting… writeChar=\(writeCharacteristic?.uuid.uuidString ?? "nil") notifyChar=\(notifyCharacteristic?.uuid.uuidString ?? "nil")")
+                lastLog = Date()
             }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         }
-        
-        return writeCharacteristic != nil && notifyCharacteristic != nil
+
+        logInfo("discoverServices: done — writeChar=\(writeCharacteristic!.uuid.uuidString) notifyChar=\(notifyCharacteristic!.uuid.uuidString)")
+        return true
     }
     
     @objc(enableNotifications)
@@ -297,6 +300,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     
     // MARK: - Device Management
     @objc public func close(clearDevicePtr: Bool = false) {
+        logInfo("close: called clearDevicePtr=\(clearDevicePtr) peripheral=\(peripheral?.name ?? "nil") state=\(peripheral?.state.rawValue ?? -1)")
         isDisconnecting = true
         DispatchQueue.main.async {
             self.isPeripheralReady = false
@@ -351,16 +355,19 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     @objc public func connect(toDevice address: String!) -> Bool {
         guard let uuid = UUID(uuidString: address),
               let peripheral = centralManager.retrievePeripherals(withIdentifiers: [uuid]).first else {
+            logError("connect(toDevice:): no peripheral found for address=\(address ?? "nil")")
             return false
         }
-        
+
+        logInfo("connect(toDevice:): peripheral=\(peripheral.name ?? "?") state=\(peripheral.state.rawValue) address=\(address ?? "nil")")
         self.peripheral = peripheral
         peripheral.delegate = self
-        // Skip reconnect if already connected — calling connect() on an
-        // already-connected peripheral can trigger a spurious disconnect/reconnect.
+
         if peripheral.state == .connected {
+            logInfo("connect(toDevice:): already connected — skipping centralManager.connect()")
             return true
         }
+        logInfo("connect(toDevice:): calling centralManager.connect()")
         centralManager.connect(peripheral, options: nil)
         return true
     }
@@ -487,22 +494,23 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     }
     
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        logInfo("Successfully connected to \(peripheral.name ?? "Unknown Device")")
+        logInfo("didConnect: name=\(peripheral.name ?? "?") id=\(peripheral.identifier) state=\(peripheral.state.rawValue)")
         peripheral.delegate = self
         DispatchQueue.main.async {
             self.isPeripheralReady = true
             self.connectedDevice = peripheral
+            self.logInfo("didConnect: isPeripheralReady=true connectedDevice set")
         }
     }
 
     public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        logError("Failed to connect to \(peripheral.name ?? "Unknown Device"): \(error?.localizedDescription ?? "No error description")")
+        logError("didFailToConnect: name=\(peripheral.name ?? "?") error=\(error?.localizedDescription ?? "none")")
     }
 
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        logInfo("Disconnected from \(peripheral.name ?? "unknown device")")
+        logInfo("didDisconnect: name=\(peripheral.name ?? "?") error=\(error?.localizedDescription ?? "none") isDisconnecting=\(isDisconnecting) isConnecting=\(isConnecting) isRetrievingLogs=\(isRetrievingLogs)")
         if let error = error {
-            logError("Disconnect error: \(error.localizedDescription)")
+            logError("didDisconnect error detail: \(error.localizedDescription) code=\((error as NSError).code)")
         }
         
         DispatchQueue.main.async {
@@ -696,6 +704,10 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     private func isReadCharacteristic(_ characteristic: CBCharacteristic) -> Bool {
         return characteristic.properties.contains(.notify) ||
                characteristic.properties.contains(.indicate)
+    }
+
+    @objc public func bleLog(_ message: String) {
+        logInfo("[C] \(message)")
     }
 
     @objc public func close() {
