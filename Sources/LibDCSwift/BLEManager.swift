@@ -585,8 +585,15 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             logInfo("  char \(characteristic.uuid.uuidString): [\(propStrs.joined(separator: ","))]")
 
             if isWriteCharacteristic(characteristic) {
-                writeCharacteristic = characteristic
-                logInfo("  → writeCharacteristic = \(characteristic.uuid.uuidString)")
+                // Prefer the dedicated write channel (has .writeWithoutResponse) over
+                // a combined read/write/notify characteristic. Only upgrade if the new
+                // candidate has .writeWithoutResponse and the current one does not.
+                let hasNoRsp = characteristic.properties.contains(.writeWithoutResponse)
+                let currentHasNoRsp = writeCharacteristic?.properties.contains(.writeWithoutResponse) ?? false
+                if writeCharacteristic == nil || (hasNoRsp && !currentHasNoRsp) {
+                    writeCharacteristic = characteristic
+                    logInfo("  → writeCharacteristic = \(characteristic.uuid.uuidString)")
+                }
             }
 
             if isReadCharacteristic(characteristic) {
