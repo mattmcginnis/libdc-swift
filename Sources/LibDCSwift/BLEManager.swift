@@ -235,10 +235,16 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     @objc public func write(_ data: Data!) -> Bool {
         guard let peripheral = self.peripheral,
               let characteristic = self.writeCharacteristic else { return false }
-        let hasNoRsp = characteristic.properties.contains(.writeWithoutResponse)
-        let writeType: CBCharacteristicWriteType = hasNoRsp ? .withoutResponse : .withResponse
+        // Prefer .withResponse when the characteristic supports it — the device
+        // application layer may only process ATT_WRITE_REQ even if it also
+        // advertises .writeWithoutResponse. Only fall back to .withoutResponse
+        // when .write is absent.
+        let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.write)
+            ? .withResponse
+            : .withoutResponse
+        let typeLabel = writeType == .withResponse ? "withRsp" : "noRsp"
         let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        logInfo("write \(data.count)b type=\(hasNoRsp ? "noRsp" : "withRsp") char=\(characteristic.uuid.uuidString): \(hex)")
+        logInfo("write \(data.count)b type=\(typeLabel) char=\(characteristic.uuid.uuidString): \(hex)")
         peripheral.writeValue(data, for: characteristic, type: writeType)
         return true
     }
