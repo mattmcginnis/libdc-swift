@@ -141,9 +141,7 @@ static dc_status_t ble_stream_read(dc_iostream_t *iostream, void *data, size_t s
  *------------------------------------------------------------------*/
 static dc_status_t ble_stream_write(dc_iostream_t *iostream, const void *data, size_t size, size_t *actual)
 {
-    // Log all writes
-    // debug_hexdump("WRITE", data, size);
-    
+    debug_hexdump("WRITE", data, size);
     ble_stream_t *s = (ble_stream_t *) iostream;
     return ble_write(s->ble_object, data, size, actual);
 }

@@ -192,19 +192,26 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             return false
         }
         
+        logInfo("enableNotifications: calling setNotifyValue(true) on \(notifyCharacteristic.uuid.uuidString) isNotifying=\(notifyCharacteristic.isNotifying)")
         peripheral.setNotifyValue(true, for: notifyCharacteristic)
-        
+
         // Wait for notifications to be enabled with timeout
         let timeout = Date(timeIntervalSinceNow: 5.0)
+        var lastLog = Date()
         while !notifyCharacteristic.isNotifying {
             if Date() > timeout {
-                logError("Timeout waiting for notifications to enable")
+                logError("enableNotifications: TIMEOUT — isNotifying still false after 5s")
                 return false
+            }
+            if Date().timeIntervalSince(lastLog) >= 0.5 {
+                logInfo("enableNotifications: still waiting… isNotifying=\(notifyCharacteristic.isNotifying)")
+                lastLog = Date()
             }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         }
-        
-        return notifyCharacteristic.isNotifying
+
+        logInfo("enableNotifications: confirmed isNotifying=true for \(notifyCharacteristic.uuid.uuidString)")
+        return true
     }
     
     // MARK: - Data Handling
@@ -253,7 +260,9 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
         let requestedInt = Int(requested)
         let startTime = Date()
         let timeout: TimeInterval = 3.0
+        logInfo("readDataPartial: start requested=\(requestedInt) bufSize=\(receivedData.count)")
 
+        var lastLog = Date()
         while Date().timeIntervalSince(startTime) < timeout {
             var outData: Data?
 
@@ -266,17 +275,23 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             }
 
             if let data = outData {
+                let hex = data.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
+                logInfo("readDataPartial: got \(data.count)b: \(hex)")
                 return data
             }
 
-            // Wait for data - use semaphore with short timeout, fall back to brief sleep
             let result = dataAvailableSemaphore.wait(timeout: .now() + .milliseconds(50))
-            if result == .timedOut {
-                // Brief sleep as fallback to avoid tight spin loop
-                Thread.sleep(forTimeInterval: 0.001)
+            if result == .success {
+                logInfo("readDataPartial: semaphore signaled — bufSize=\(receivedData.count)")
+            }
+            if Date().timeIntervalSince(lastLog) >= 1.0 {
+                let elapsed = String(format: "%.1f", Date().timeIntervalSince(startTime))
+                logInfo("readDataPartial: waiting… elapsed=\(elapsed)s bufSize=\(receivedData.count)")
+                lastLog = Date()
             }
         }
 
+        logError("readDataPartial: TIMEOUT after 3s — no data received")
         return nil
     }
     
@@ -642,7 +657,9 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            logError("Error changing notification state: \(error.localizedDescription)")
+            logError("notifyState: ERROR on \(characteristic.uuid.uuidString): \(error.localizedDescription)")
+        } else {
+            logInfo("notifyState: \(characteristic.uuid.uuidString) isNotifying=\(characteristic.isNotifying)")
         }
     }
 

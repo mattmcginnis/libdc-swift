@@ -126,13 +126,22 @@ dc_status_t ble_read(ble_object_t *io, void *buffer, size_t requested, size_t *a
     Class CoreBluetoothManagerClass = NSClassFromString(@"CoreBluetoothManager");
     id<CoreBluetoothManagerProtocol> manager = [CoreBluetoothManagerClass shared];
 
-    // Return one BLE packet at a time to preserve packet boundaries for SLIP framing
+    NSLog(@"[BLEBridge] ble_read: requesting %zu bytes", requested);
     NSData *partialData = [manager readDataPartial:(int)requested];
 
     if (!partialData || partialData.length == 0) {
+        NSLog(@"[BLEBridge] ble_read: TIMEOUT/EMPTY — returning DC_STATUS_IO");
         *actual = 0;
         return DC_STATUS_IO;
     }
+
+    const unsigned char *bytes = (const unsigned char *)partialData.bytes;
+    NSMutableString *hex = [NSMutableString string];
+    for (NSUInteger i = 0; i < MIN(partialData.length, 16); i++) {
+        [hex appendFormat:@"%02X ", bytes[i]];
+    }
+    NSLog(@"[BLEBridge] ble_read: got %zu bytes: %@", partialData.length, hex);
+
     memcpy(buffer, partialData.bytes, partialData.length);
     *actual = partialData.length;
     return DC_STATUS_SUCCESS;
@@ -142,11 +151,20 @@ dc_status_t ble_write(ble_object_t *io, const void *data, size_t size, size_t *a
     Class CoreBluetoothManagerClass = NSClassFromString(@"CoreBluetoothManager");
     id<CoreBluetoothManagerProtocol> manager = [CoreBluetoothManagerClass shared];
     NSData *nsData = [NSData dataWithBytes:data length:size];
-    
+
+    const unsigned char *bytes = (const unsigned char *)data;
+    NSMutableString *hex = [NSMutableString string];
+    for (NSUInteger i = 0; i < MIN(size, 16); i++) {
+        [hex appendFormat:@"%02X ", bytes[i]];
+    }
+    NSLog(@"[BLEBridge] ble_write: %zu bytes: %@", size, hex);
+
     if ([manager writeData:nsData]) {
+        NSLog(@"[BLEBridge] ble_write: success");
         *actual = size;
         return DC_STATUS_SUCCESS;
     } else {
+        NSLog(@"[BLEBridge] ble_write: FAILED (write returned false)");
         *actual = 0;
         return DC_STATUS_IO;
     }
