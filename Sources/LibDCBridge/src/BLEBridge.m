@@ -135,18 +135,13 @@ dc_status_t ble_ioctl(ble_object_t *io, unsigned int request, void *data_, size_
          request, (char)type, type, nr, size_);
 
     if (type == 'b' && nr == 0) {
-        if (!io || io->device_name[0] == '\0') {
-            blog(bleManager, @"ble_ioctl GET_NAME: device_name empty — returning IO error");
-            return DC_STATUS_IO;
-        }
-        size_t len = strlen(io->device_name);
-        if (len + 1 > size_) {
-            blog(bleManager, @"ble_ioctl GET_NAME: buffer too small (need %zu, have %zu)", len+1, size_);
-            return DC_STATUS_INVALIDARGS;
-        }
-        memcpy(data_, io->device_name, len + 1);
-        blog(bleManager, @"ble_ioctl GET_NAME: returned '%s'", io->device_name);
-        return DC_STATUS_SUCCESS;
+        // DIAGNOSTIC: returning UNSUPPORTED causes oceanic_atom2 to SKIP the
+        // handshake and go straight to the VERSION command. This lets us determine
+        // whether the device responds to VERSION without the handshake, which would
+        // confirm the handshake bytes are wrong rather than the device being in
+        // the wrong mode.
+        blog(bleManager, @"ble_ioctl GET_NAME: returning UNSUPPORTED — skipping handshake to test VERSION command directly");
+        return DC_STATUS_UNSUPPORTED;
     }
     if (type == 'b' && nr == 1) {
         blog(bleManager, @"ble_ioctl GET_PINCODE: returning UNSUPPORTED");
