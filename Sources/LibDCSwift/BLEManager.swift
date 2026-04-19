@@ -259,7 +259,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     @objc public func readDataPartial(_ requested: Int32) -> Data? {
         let requestedInt = Int(requested)
         let startTime = Date()
-        let timeout: TimeInterval = 3.0
+        let timeout: TimeInterval = 10.0
         logInfo("readDataPartial: start requested=\(requestedInt) bufSize=\(receivedData.count)")
 
         var lastLog = Date()
@@ -291,7 +291,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             }
         }
 
-        logError("readDataPartial: TIMEOUT after 3s — no data received")
+        logError("readDataPartial: TIMEOUT after 10s — no data received")
         return nil
     }
     
