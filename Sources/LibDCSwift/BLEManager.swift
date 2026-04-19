@@ -499,7 +499,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
         DispatchQueue.main.async {
             self.isPeripheralReady = true
             self.connectedDevice = peripheral
-            self.logInfo("didConnect: isPeripheralReady=true connectedDevice set")
+            logInfo("didConnect: isPeripheralReady=true connectedDevice set")
         }
     }
 
