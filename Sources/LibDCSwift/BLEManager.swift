@@ -615,11 +615,14 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             logError("Error receiving data: \(error.localizedDescription)")
             return
         }
-        
+
         guard let data = characteristic.value else {
             return
         }
-        
+
+        let hex = data.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
+        logInfo("notify \(data.count)b char=\(characteristic.uuid.uuidString): \(hex)")
+
         queue.sync {
             // Append new data to our buffer immediately
             receivedData.append(data)
