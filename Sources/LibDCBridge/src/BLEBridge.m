@@ -55,6 +55,15 @@ bool connectToBLEDevice(ble_object_t *io, const char *deviceAddress) {
         return false;
     }
 
+    // Store the peripheral's BLE name for ble_ioctl (DC_IOCTL_BLE_GET_NAME)
+    NSString *peripheralName = [manager getPeripheralName];
+    if (peripheralName) {
+        const char *cname = [peripheralName UTF8String];
+        strncpy(io->device_name, cname, sizeof(io->device_name) - 1);
+        io->device_name[sizeof(io->device_name) - 1] = '\0';
+        NSLog(@"Stored peripheral name: %s", io->device_name);
+    }
+
     success = [manager discoverServices];
     if (!success) {
         NSLog(@"Service discovery failed");
@@ -94,17 +103,10 @@ dc_status_t ble_ioctl(ble_object_t *io, unsigned int request, void *data_, size_
     unsigned int type = (request >>  8) & 0xFF;
     unsigned int nr   = (request >>  0) & 0xFF;
     if (type == 'b' && nr == 0) {
-        Class cls = NSClassFromString(@"CoreBluetoothManager");
-        id<CoreBluetoothManagerProtocol> mgr = [cls shared];
-        NSString *name = nil;
-        if ([mgr respondsToSelector:@selector(connectedDevice)]) {
-            name = [(id)mgr connectedDevice].name;
-        }
-        if (!name) return DC_STATUS_UNAVAILABLE;
-        const char *cname = [name UTF8String];
-        size_t len = strlen(cname);
+        if (!io || io->device_name[0] == '\0') return DC_STATUS_IO;
+        size_t len = strlen(io->device_name);
         if (len + 1 > size_) return DC_STATUS_INVALIDARGS;
-        memcpy(data_, cname, len + 1);
+        memcpy(data_, io->device_name, len + 1);
         return DC_STATUS_SUCCESS;
     }
     return DC_STATUS_UNSUPPORTED;

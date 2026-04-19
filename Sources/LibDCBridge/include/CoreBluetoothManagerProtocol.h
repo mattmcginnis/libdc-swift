@@ -8,6 +8,7 @@
 + (id)shared;
 - (BOOL)connectToDevice:(NSString *)address;
 - (BOOL)getPeripheralReadyState;
+- (NSString *)getPeripheralName;
 - (BOOL)discoverServices;
 - (BOOL)enableNotifications;
 - (BOOL)writeData:(NSData *)data;

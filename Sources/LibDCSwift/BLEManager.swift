@@ -134,7 +134,12 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     public func getPeripheralReadyState() -> Bool {
         return self.isPeripheralReady
     }
-    
+
+    @objc(getPeripheralName)
+    public func getPeripheralName() -> String? {
+        return self.peripheral?.name
+    }
+
     @objc(discoverServices)
     public func discoverServices() -> Bool {
         guard let peripheral = self.peripheral else {
