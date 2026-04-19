@@ -42,6 +42,7 @@ static inline uint32_t array_uint32_be(const unsigned char array[]) {
 // BLE object
 typedef struct ble_object {
     void* manager;
+    char device_name[32]; // BLE peripheral name (e.g. "FH007706"), set on connect
 } ble_object_t;
 
 // BLE object functions
