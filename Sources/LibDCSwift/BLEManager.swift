@@ -504,12 +504,15 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     }
     
     public func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
-        if peripheral.name != nil {
-            if let uuids = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID], !uuids.isEmpty {
+        if let name = peripheral.name {
+            let uuids = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
+            if !uuids.isEmpty {
                 advertisedServiceUUIDs[peripheral.identifier] = uuids
             }
-            if DeviceStorage.shared.getStoredDevice(uuid: peripheral.identifier.uuidString) != nil ||
-               DeviceConfiguration.fromName(peripheral.name ?? "") != nil {
+            let isSupported = DeviceStorage.shared.getStoredDevice(uuid: peripheral.identifier.uuidString) != nil ||
+                              DeviceConfiguration.fromName(name) != nil
+            logInfo("BLE peripheral found: \(name) uuids=\(uuids.map { $0.uuidString }) supported=\(isSupported)")
+            if isSupported {
                 addDiscoveredPeripheral(peripheral)
             }
         }
