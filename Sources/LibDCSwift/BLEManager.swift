@@ -334,8 +334,13 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
         
         self.peripheral = peripheral
         peripheral.delegate = self
+        // Skip reconnect if already connected — calling connect() on an
+        // already-connected peripheral can trigger a spurious disconnect/reconnect.
+        if peripheral.state == .connected {
+            return true
+        }
         centralManager.connect(peripheral, options: nil)
-        return true  // Return immediately, connection status will be handled by delegate
+        return true
     }
     
     public func connectToStoredDevice(_ uuid: String) -> Bool {

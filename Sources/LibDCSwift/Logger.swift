@@ -39,17 +39,20 @@ public class Logger {
         minLevel = level
     }
     
+    /// Optional external handler — set by the host app to capture log lines.
+    public var logHandler: ((String) -> Void)?
+
     private init() {
         isEnabled = true
         minLevel = .debug
     }
-    
+
     public func log(_ message: String, level: LogLevel = .debug, file: String = #file, function: String = #function) {
         let timestamp = dateFormatter.string(from: Date())
         let fileName = (file as NSString).lastPathComponent
-        
-        // Always print the message during debugging
-        print("\(level.prefix) [\(timestamp)] [\(fileName)] \(message)")
+        let line = "\(level.prefix) [\(timestamp)] [\(fileName)] \(message)"
+        print(line)
+        logHandler?(line)
     }
     
     private func handleBLEDataLog(_ message: String, _ timestamp: String) {
