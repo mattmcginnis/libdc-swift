@@ -68,8 +68,16 @@ bool enableNotifications(ble_object_t *io);
 
 // Installs a log callback on the libdivecomputer context that forwards every
 // internal message (protocol retries, CRC failures, device driver state) to
-// the in-app BLE log. Call immediately after dc_context_new to enable
-// DC_LOGLEVEL_ALL visibility into the C library.
+// the in-app BLE log. Call immediately after dc_context_new.
+// Defaults to DC_LOGLEVEL_WARNING — downloads issue thousands of B1 reads and
+// logging every one through to JS/disk adds seconds of per-packet overhead.
+// Use ble_set_verbose_logging(true) to promote back to DC_LOGLEVEL_ALL for
+// debugging sessions.
 void installLibDCLogger(dc_context_t *context);
+
+// Toggle verbose BLE tracing (per-packet ble_read/ble_write hex dumps and
+// libdc DEBUG-level output). Off by default so bulk memory reads don't fire
+// ~20k log events through the RN bridge mid-download.
+void ble_set_verbose_logging(bool verbose);
 
 #endif /* BLEBridge_h */

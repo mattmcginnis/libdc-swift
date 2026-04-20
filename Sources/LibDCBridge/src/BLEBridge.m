@@ -1,6 +1,7 @@
 #import "BLEBridge.h"
 #import <Foundation/Foundation.h>
 #include <mach/mach_time.h>
+#include <stdatomic.h>
 #include <libdivecomputer/context.h>
 
 static id<CoreBluetoothManagerProtocol> bleManager = nil;
@@ -66,6 +67,18 @@ void initializeBLEManager(void) {
     blog(bleManager, @"initializeBLEManager: bleManager=%@", bleManager);
 }
 
+// Gates per-packet trace logs in ble_read/ble_write and raises libdc's log
+// level from WARNING → ALL. Off by default — every BLE exchange would
+// otherwise fire ~6 log lines, each of which marshals across the RN bridge
+// and touches the shared BLELogger file handle. During a 3300-read bulk
+// download that's ~20k log events, which measurably starves the BLE radio
+// from getting the next packet queued in time.
+static atomic_bool g_verbose_ble_logging = false;
+void ble_set_verbose_logging(bool verbose) {
+    atomic_store(&g_verbose_ble_logging, verbose);
+}
+static inline bool ble_verbose(void) { return atomic_load(&g_verbose_ble_logging); }
+
 // Forwards libdivecomputer's internal log output into the in-app BLE log.
 // Extracts just the basename of __FILE__ so lines stay readable.
 static void libdc_log_forward(dc_context_t *ctx,
@@ -96,10 +109,12 @@ static void libdc_log_forward(dc_context_t *ctx,
 
 void installLibDCLogger(dc_context_t *context) {
     if (!context) return;
-    dc_context_set_loglevel(context, DC_LOGLEVEL_ALL);
+    dc_loglevel_t level = ble_verbose() ? DC_LOGLEVEL_ALL : DC_LOGLEVEL_WARNING;
+    dc_context_set_loglevel(context, level);
     dc_context_set_logfunc(context, libdc_log_forward, NULL);
     if (bleManager) {
-        blog(bleManager, @"installLibDCLogger: DC_LOGLEVEL_ALL installed on context=%p", (void *)context);
+        blog(bleManager, @"installLibDCLogger: level=%s on context=%p",
+             level == DC_LOGLEVEL_ALL ? "ALL" : "WARNING", (void *)context);
     }
 }
 
@@ -249,18 +264,22 @@ dc_status_t ble_read(ble_object_t *io, void *buffer, size_t requested, size_t *a
 
     Class cls = NSClassFromString(@"CoreBluetoothManager");
     id<CoreBluetoothManagerProtocol> manager = [cls shared];
-    blog(manager, @"ble_read: requesting %zu bytes", requested);
+    bool verbose = ble_verbose();
+    if (verbose) blog(manager, @"ble_read: requesting %zu bytes", requested);
 
     NSData *partialData = [manager readDataPartial:(int)requested];
 
     if (!partialData || partialData.length == 0) {
+        // Always log timeouts — they matter and are infrequent.
         blog(manager, @"ble_read: TIMEOUT/EMPTY — DC_STATUS_IO");
         *actual = 0;
         return DC_STATUS_IO;
     }
 
-    blog(manager, @"ble_read: received %zu bytes: %@",
-         partialData.length, hexStr(partialData.bytes, partialData.length, 20));
+    if (verbose) {
+        blog(manager, @"ble_read: received %zu bytes: %@",
+             partialData.length, hexStr(partialData.bytes, partialData.length, 20));
+    }
 
     memcpy(buffer, partialData.bytes, partialData.length);
     *actual = partialData.length;
@@ -271,14 +290,16 @@ dc_status_t ble_write(ble_object_t *io, const void *data, size_t size, size_t *a
     Class cls = NSClassFromString(@"CoreBluetoothManager");
     id<CoreBluetoothManagerProtocol> manager = [cls shared];
     NSData *nsData = [NSData dataWithBytes:data length:size];
+    bool verbose = ble_verbose();
 
-    blog(manager, @"ble_write: %zu bytes: %@", size, hexStr(data, size, 20));
+    if (verbose) blog(manager, @"ble_write: %zu bytes: %@", size, hexStr(data, size, 20));
 
     if ([manager writeData:nsData]) {
-        blog(manager, @"ble_write: write() returned true (queued)");
+        if (verbose) blog(manager, @"ble_write: write() returned true (queued)");
         *actual = size;
         return DC_STATUS_SUCCESS;
     } else {
+        // Always log write failures.
         blog(manager, @"ble_write: write() returned false — no peripheral or characteristic");
         *actual = 0;
         return DC_STATUS_IO;

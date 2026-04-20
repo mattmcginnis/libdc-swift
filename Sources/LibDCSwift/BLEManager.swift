@@ -261,16 +261,26 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
         // sit in iOS's internal queue until peripheralIsReady(toSendWriteWithoutResponse:)
         // fires. Logging it catches silent buffer-full drops.
         let canSend = peripheral.canSendWriteWithoutResponse
-        logInfo("write \(data.count)b type=\(typeLabel) char=\(characteristic.uuid.uuidString) canSendNoRsp=\(canSend) state=\(peripheral.state.rawValue): \(hex)")
+        if CoreBluetoothManager.verboseLogging {
+            logInfo("write \(data.count)b type=\(typeLabel) char=\(characteristic.uuid.uuidString) canSendNoRsp=\(canSend) state=\(peripheral.state.rawValue): \(hex)")
+        }
         peripheral.writeValue(data, for: characteristic, type: writeType)
         return true
     }
-    
+
+    /// Gate per-exchange trace logs (write/readDataPartial). Off by default — during
+    /// a bulk download these fire thousands of times and each log line crosses the
+    /// RN bridge, so leaving them on measurably slows the transfer.
+    @objc public static var verboseLogging: Bool = false
+
     @objc public func readDataPartial(_ requested: Int32) -> Data? {
         let requestedInt = Int(requested)
         let startTime = Date()
         let timeout: TimeInterval = 10.0
-        logInfo("readDataPartial: start requested=\(requestedInt) bufSize=\(receivedData.count)")
+        let verbose = CoreBluetoothManager.verboseLogging
+        if verbose {
+            logInfo("readDataPartial: start requested=\(requestedInt) bufSize=\(receivedData.count)")
+        }
 
         var lastLog = Date()
         var polledReadChars = false
@@ -286,13 +296,15 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             }
 
             if let data = outData {
-                let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-                logInfo("readDataPartial: got \(data.count)b: \(hex)")
+                if verbose {
+                    let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+                    logInfo("readDataPartial: got \(data.count)b: \(hex)")
+                }
                 return data
             }
 
             let result = dataAvailableSemaphore.wait(timeout: .now() + .milliseconds(50))
-            if result == .success {
+            if verbose && result == .success {
                 logInfo("readDataPartial: semaphore signaled — bufSize=\(receivedData.count)")
             }
             let elapsedSec = Date().timeIntervalSince(startTime)

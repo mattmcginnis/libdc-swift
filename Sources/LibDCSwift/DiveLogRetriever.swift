@@ -267,12 +267,14 @@ public class DiveLogRetriever {
                 
                 let contextPtr = UnsafeMutableRawPointer(Unmanaged.passRetained(context).toOpaque())
                 
-                // Timer.scheduledTimer requires a running RunLoop, which DispatchQueue worker
-                // threads don't have — the old Timer-based approach silently never fired, so
-                // the progress bar stayed at 0% for the whole download. DispatchSourceTimer
-                // runs on the dispatch queue directly.
-                let progressTimer = DispatchSource.makeTimerSource(queue: retrievalQueue)
-                progressTimer.schedule(deadline: .now() + 0.25, repeating: 0.25)
+                // Progress timer MUST run on a queue that isn't blocked by the main transfer.
+                // The retrieval queue is synchronously occupied by dc_device_foreach for the
+                // whole download, so scheduling the timer on it silently drops every tick.
+                // A Timer.scheduledTimer on a DispatchQueue worker also fails (no RunLoop).
+                // DispatchSourceTimer on .global() is the one combination that actually fires.
+                let progressQueue = DispatchQueue.global(qos: .utility)
+                let progressTimer = DispatchSource.makeTimerSource(queue: progressQueue)
+                progressTimer.schedule(deadline: .now() + 0.2, repeating: 0.2)
                 progressTimer.setEventHandler {
                     if devicePtr.pointee.have_progress != 0 {
                         let cur = Int(devicePtr.pointee.progress.current)
