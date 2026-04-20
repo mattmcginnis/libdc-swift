@@ -582,7 +582,20 @@ dc_status_t find_descriptor_by_name(dc_descriptor_t **out_descriptor, const char
         }
     }
 
-    // Fall back to filter-based matching if no pattern match found
+    // Fall back to filter-based matching if no pattern match found.
+    //
+    // Why the per-family narrowing below: dc_filter_oceanic (and the Pelagic filter)
+    // return "matches" if the name matches *any* model in their static model[] array —
+    // not specifically this descriptor's model. So for a name like "FH007706" (i300C,
+    // 0x4648), the Pro Plus X descriptor (0x4552 → "ER") ALSO passes the filter because
+    // the array contains 0x4648 somewhere. The iterator returns the first descriptor
+    // that passes, which is Pro Plus X. Opening the i300C as Pro Plus X causes libdc to
+    // issue Pro Plus X memory-read commands to the wrong hardware — a known i300C brick
+    // path (all LCD segments latch on, requires battery pull).
+    //
+    // Narrow with a second check: for Oceanic/Pelagic families the leading two bytes of
+    // the model code are the BLE name's ASCII prefix (dc_match_oceanic convention). Only
+    // accept the descriptor if the name prefix matches THIS descriptor's specific model.
     rc = dc_descriptor_iterator(&iterator);
     if (rc != DC_STATUS_SUCCESS) {
         return rc;
@@ -590,9 +603,21 @@ dc_status_t find_descriptor_by_name(dc_descriptor_t **out_descriptor, const char
 
     while ((rc = dc_iterator_next(iterator, &descriptor)) == DC_STATUS_SUCCESS) {
         unsigned int transports = dc_descriptor_get_transports(descriptor);
-        
+
         if ((transports & DC_TRANSPORT_BLE) &&
             dc_descriptor_filter(descriptor, DC_TRANSPORT_BLE, name)) {
+            dc_family_t family = dc_descriptor_get_type(descriptor);
+            if (family == DC_FAMILY_OCEANIC_ATOM2 || family == DC_FAMILY_PELAGIC_I330R) {
+                unsigned int model = dc_descriptor_get_model(descriptor);
+                unsigned char hi = (unsigned char)((model >> 8) & 0xFF);
+                unsigned char lo = (unsigned char)(model & 0xFF);
+                if (strlen(name) < 2 ||
+                    (unsigned char)name[0] != hi ||
+                    (unsigned char)name[1] != lo) {
+                    dc_descriptor_free(descriptor);
+                    continue;
+                }
+            }
             *out_descriptor = descriptor;
             dc_iterator_free(iterator);
             return DC_STATUS_SUCCESS;
