@@ -261,11 +261,20 @@ public class DiveLogRetriever {
                 
                 let contextPtr = UnsafeMutableRawPointer(Unmanaged.passRetained(context).toOpaque())
                 
-                let progressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+                // Timer.scheduledTimer requires a running RunLoop, which DispatchQueue worker
+                // threads don't have — the old Timer-based approach silently never fired, so
+                // the progress bar stayed at 0% for the whole download. DispatchSourceTimer
+                // runs on the dispatch queue directly.
+                let progressTimer = DispatchSource.makeTimerSource(queue: retrievalQueue)
+                progressTimer.schedule(deadline: .now() + 0.25, repeating: 0.25)
+                progressTimer.setEventHandler {
                     if devicePtr.pointee.have_progress != 0 {
-                        onProgress?(Int(devicePtr.pointee.progress.current), Int(devicePtr.pointee.progress.maximum))
+                        let cur = Int(devicePtr.pointee.progress.current)
+                        let max = Int(devicePtr.pointee.progress.maximum)
+                        onProgress?(cur, max)
                     }
                 }
+                progressTimer.resume()
                 
                 devicePtr.pointee.fingerprint_context = Unmanaged.passUnretained(viewModel).toOpaque()
                 devicePtr.pointee.lookup_fingerprint = fingerprintLookup
@@ -290,7 +299,7 @@ public class DiveLogRetriever {
                     logError("❌ Download failed: DC_STATUS_\(errorName)")
                 }
 
-                progressTimer.invalidate()
+                progressTimer.cancel()
 
                 DispatchQueue.main.async {
                     // Determine the outcome of the download
