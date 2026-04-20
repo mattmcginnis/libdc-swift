@@ -941,23 +941,27 @@ oceanic_atom2_device_open (dc_device_t **out, dc_context_t *context, dc_iostream
 	// Make sure everything is in a sane state.
 	dc_iostream_purge (device->iostream, DC_DIRECTION_ALL);
 
-	// For BLE, send the passphrase handshake first to put the device into
-	// PC/download mode before issuing the version command. Over serial/USB,
+	// Over BLE the correct order is VERSION first, THEN the passphrase handshake
+	// (verified via packet capture of Aqualung DiverLog+ talking to an i300C:
+	// VERSION 0x84 is issued before the 0xE5 passphrase). Over serial/USB,
 	// connecting the cable activates PC mode automatically so the handshake
-	// is not needed at this stage.
+	// isn't needed at this stage — VERSION alone is fine.
+	//
+	// Previously this code did HANDSHAKE → VERSION, which the i300C would NAK
+	// ("Unexpected answer start byte(s)" from oceanic_atom2_packet). Upstream
+	// then swallowed the NAK as DC_STATUS_SUCCESS, let VERSION succeed, and
+	// proceeded to memory-read commands — which is the path that latched all
+	// LCD segments on the physical i300C and required a battery pull.
+	status = oceanic_atom2_device_version ((dc_device_t *) device, device->base.version, sizeof (device->base.version));
+	if (status != DC_STATUS_SUCCESS) {
+		goto error_free;
+	}
+
 	if (dc_iostream_get_transport (device->iostream) == DC_TRANSPORT_BLE) {
 		status = oceanic_atom2_ble_handshake(device);
 		if (status != DC_STATUS_SUCCESS) {
 			goto error_free;
 		}
-	}
-
-	// Switch the device from surface mode into download mode. Before sending
-	// this command, the device needs to be in PC mode (automatically activated
-	// by connecting the device), or already in download mode.
-	status = oceanic_atom2_device_version ((dc_device_t *) device, device->base.version, sizeof (device->base.version));
-	if (status != DC_STATUS_SUCCESS) {
-		goto error_free;
 	}
 
 	HEXDUMP (context, DC_LOGLEVEL_DEBUG, "Version", device->base.version, sizeof (device->base.version));
