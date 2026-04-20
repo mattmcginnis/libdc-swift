@@ -947,12 +947,42 @@ oceanic_atom2_device_open (dc_device_t **out, dc_context_t *context, dc_iostream
 	// connecting the cable activates PC mode automatically so the handshake
 	// isn't needed at this stage — VERSION alone is fine.
 	//
-	// Previously this code did HANDSHAKE → VERSION, which the i300C would NAK
-	// ("Unexpected answer start byte(s)" from oceanic_atom2_packet). Upstream
-	// then swallowed the NAK as DC_STATUS_SUCCESS, let VERSION succeed, and
-	// proceeded to memory-read commands — which is the path that latched all
-	// LCD segments on the physical i300C and required a battery pull.
-	status = oceanic_atom2_device_version ((dc_device_t *) device, device->base.version, sizeof (device->base.version));
+	// Previously this code did HANDSHAKE → VERSION, which the i300C would NAK.
+	//
+	// Also for BLE: the device needs ~2 seconds after its GATT notification
+	// CCCD is enabled before it will process commands. The DiverLog+ capture
+	// shows a 2.5-second gap between CCCD write and the first VERSION write,
+	// and the DiverLog+ app's very first VERSION (seq=0x02) was still silently
+	// dropped — only the retry at seq=0x03 succeeded. Without this delay the
+	// first write reliably vanishes on i300C and the subsequent retries
+	// (fired 100ms apart) also get lost while the device is still warming up.
+	int is_ble = (dc_iostream_get_transport (device->iostream) == DC_TRANSPORT_BLE);
+	if (is_ble) {
+		dc_iostream_sleep (device->iostream, 2500);
+	}
+
+	// Retry VERSION a few times on BLE. Even with a 2.5s settling delay the
+	// DiverLog+ capture showed the device silently dropping its first VERSION
+	// write (seq=0x02) and only responding to the retry 3 seconds later.
+	// oceanic_atom2_transfer retries twice internally at 100ms apart (too fast
+	// to wait out the warmup); the outer loop here gives the device longer
+	// windows to become responsive.
+	int version_attempts = is_ble ? 3 : 1;
+	for (int attempt = 0; attempt < version_attempts; attempt++) {
+		status = oceanic_atom2_device_version ((dc_device_t *) device, device->base.version, sizeof (device->base.version));
+		if (status == DC_STATUS_SUCCESS) {
+			break;
+		}
+		// Only retry for transient BLE errors. Anything else (NOMEMORY, INVALIDARGS, ...)
+		// indicates a real problem and is surfaced immediately.
+		if (status != DC_STATUS_TIMEOUT && status != DC_STATUS_PROTOCOL && status != DC_STATUS_IO) {
+			goto error_free;
+		}
+		if (attempt + 1 < version_attempts) {
+			WARNING (context, "VERSION failed (rc=%d) — retrying after 2s settle.", status);
+			dc_iostream_sleep (device->iostream, 2000);
+		}
+	}
 	if (status != DC_STATUS_SUCCESS) {
 		goto error_free;
 	}
