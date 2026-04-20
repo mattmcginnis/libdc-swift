@@ -16,6 +16,7 @@
 #endif
 
 #include "libdivecomputer/common.h"
+#include "libdivecomputer/context.h"
 #include "libdivecomputer/iostream.h"
 #include "libdivecomputer/custom.h"
 #include "libdivecomputer/parser.h"
@@ -64,5 +65,11 @@ bool connectToBLEDevice(ble_object_t *io, const char *deviceAddress);
 bool ble_can_connect_now(void);
 bool discoverServices(ble_object_t *io);
 bool enableNotifications(ble_object_t *io);
+
+// Installs a log callback on the libdivecomputer context that forwards every
+// internal message (protocol retries, CRC failures, device driver state) to
+// the in-app BLE log. Call immediately after dc_context_new to enable
+// DC_LOGLEVEL_ALL visibility into the C library.
+void installLibDCLogger(dc_context_t *context);
 
 #endif /* BLEBridge_h */

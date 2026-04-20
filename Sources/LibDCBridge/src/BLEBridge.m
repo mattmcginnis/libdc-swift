@@ -1,6 +1,7 @@
 #import "BLEBridge.h"
 #import <Foundation/Foundation.h>
 #include <mach/mach_time.h>
+#include <libdivecomputer/context.h>
 
 static id<CoreBluetoothManagerProtocol> bleManager = nil;
 
@@ -60,6 +61,43 @@ void initializeBLEManager(void) {
     Class cls = NSClassFromString(@"CoreBluetoothManager");
     bleManager = [cls shared];
     blog(bleManager, @"initializeBLEManager: bleManager=%@", bleManager);
+}
+
+// Forwards libdivecomputer's internal log output into the in-app BLE log.
+// Extracts just the basename of __FILE__ so lines stay readable.
+static void libdc_log_forward(dc_context_t *ctx,
+                              dc_loglevel_t loglevel,
+                              const char *file,
+                              unsigned int line,
+                              const char *function,
+                              const char *message,
+                              void *userdata) {
+    (void)ctx;
+    (void)userdata;
+    const char *levelStr;
+    switch (loglevel) {
+        case DC_LOGLEVEL_ERROR:   levelStr = "ERR "; break;
+        case DC_LOGLEVEL_WARNING: levelStr = "WARN"; break;
+        case DC_LOGLEVEL_INFO:    levelStr = "INFO"; break;
+        case DC_LOGLEVEL_DEBUG:   levelStr = "DBG "; break;
+        case DC_LOGLEVEL_ALL:     levelStr = "ALL "; break;
+        default:                  levelStr = "    "; break;
+    }
+    const char *base = file ? strrchr(file, '/') : NULL;
+    base = base ? base + 1 : (file ? file : "?");
+    if (bleManager) {
+        blog(bleManager, @"[libdc %s] %s:%u %s: %s",
+             levelStr, base, line, function ? function : "?", message ? message : "");
+    }
+}
+
+void installLibDCLogger(dc_context_t *context) {
+    if (!context) return;
+    dc_context_set_loglevel(context, DC_LOGLEVEL_ALL);
+    dc_context_set_logfunc(context, libdc_log_forward, NULL);
+    if (bleManager) {
+        blog(bleManager, @"installLibDCLogger: DC_LOGLEVEL_ALL installed on context=%p", (void *)context);
+    }
 }
 
 ble_object_t* createBLEObject(void) {

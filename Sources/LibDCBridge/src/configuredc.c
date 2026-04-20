@@ -330,6 +330,7 @@ dc_status_t open_ble_device(device_data_t *data, const char *devaddr, dc_family_
         printf("Failed to create context, rc=%d\n", rc);
         return rc;
     }
+    installLibDCLogger(data->context);
 
     // Get descriptor for the device
     rc = find_descriptor_by_model(&descriptor, family, model);

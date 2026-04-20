@@ -220,7 +220,20 @@ import LibDCBridge
         let storedDevice = DeviceStorage.shared.getStoredDevice(uuid: deviceAddress)
 
         if let storedDevice = storedDevice {
-            logDebug("Found stored device configuration - Family: \(storedDevice.family), Model: \(storedDevice.model)")
+            logDebug("Found stored device configuration - Family: \(storedDevice.family), Model: \(storedDevice.model) (0x\(String(storedDevice.model, radix: 16, uppercase: true)))")
+            // Resolve the descriptor so we can print the canonical vendor/product name libdc
+            // has matched the stored family+model to. If this disagrees with the user's device,
+            // we've got a mismatched stored configuration — a known cause of handshake failures.
+            var desc: OpaquePointer?
+            let rc = find_descriptor_by_model(&desc, storedDevice.family.asDCFamily, UInt32(storedDevice.model))
+            if rc == DC_STATUS_SUCCESS, let d = desc {
+                let vendor = dc_descriptor_get_vendor(d).flatMap { String(cString: $0) } ?? "?"
+                let product = dc_descriptor_get_product(d).flatMap { String(cString: $0) } ?? "?"
+                logInfo("  → descriptor resolves to: vendor='\(vendor)' product='\(product)'")
+                dc_descriptor_free(d)
+            } else {
+                logWarning("  → find_descriptor_by_model failed (rc=\(rc)) for family=\(storedDevice.family) model=\(storedDevice.model) — stored config may be invalid")
+            }
         }
 
         // Determine which configuration to use: Forced > Stored > Auto-detect from name > Default(0)
@@ -423,6 +436,10 @@ import LibDCBridge
             let rc = dc_context_new(&context)
             if rc != DC_STATUS_SUCCESS {
                 logError("Failed to create dive computer context")
+                return
+            }
+            if let ctx = context {
+                installLibDCLogger(ctx)
             }
         }
     }

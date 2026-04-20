@@ -83,6 +83,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     private var preferredService: CBService?
     private var pendingOperations: [() -> Void] = []
     private var advertisedServiceUUIDs: [UUID: [CBUUID]] = [:]
+    private var lastAdvertisedRSSI: [UUID: Int] = [:]
     private var lastCloseTime: Date? = nil
     private let reconnectCooldown: TimeInterval = 3.0
     
@@ -256,7 +257,11 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             : .withoutResponse
         let typeLabel = writeType == .withResponse ? "withRsp" : "noRsp"
         let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        logInfo("write \(data.count)b type=\(typeLabel) char=\(characteristic.uuid.uuidString): \(hex)")
+        // For .withoutResponse, canSendWriteWithoutResponse being false means the write will
+        // sit in iOS's internal queue until peripheralIsReady(toSendWriteWithoutResponse:)
+        // fires. Logging it catches silent buffer-full drops.
+        let canSend = peripheral.canSendWriteWithoutResponse
+        logInfo("write \(data.count)b type=\(typeLabel) char=\(characteristic.uuid.uuidString) canSendNoRsp=\(canSend) state=\(peripheral.state.rawValue): \(hex)")
         peripheral.writeValue(data, for: characteristic, type: writeType)
         return true
     }
@@ -281,7 +286,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             }
 
             if let data = outData {
-                let hex = data.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
+                let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
                 logInfo("readDataPartial: got \(data.count)b: \(hex)")
                 return data
             }
@@ -540,6 +545,8 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
         let mtuNoRsp = peripheral.maximumWriteValueLength(for: .withoutResponse)
         logInfo("didConnect: MTU withResponse=\(mtuWithRsp) withoutResponse=\(mtuNoRsp)")
         peripheral.delegate = self
+        // Live link-quality readout. Result arrives via didReadRSSI callback.
+        peripheral.readRSSI()
         DispatchQueue.main.async {
             self.isPeripheralReady = true
             self.connectedDevice = peripheral
@@ -588,10 +595,33 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             if !uuids.isEmpty {
                 advertisedServiceUUIDs[peripheral.identifier] = uuids
             }
+            lastAdvertisedRSSI[peripheral.identifier] = RSSI.intValue
             let isSupported = DeviceStorage.shared.getStoredDevice(uuid: peripheral.identifier.uuidString) != nil ||
                               DeviceConfiguration.fromName(name) != nil
-            logInfo("BLE peripheral found: \(name) uuids=\(uuids.map { $0.uuidString }) supported=\(isSupported)")
+            logInfo("BLE peripheral found: \(name) rssi=\(RSSI) uuids=\(uuids.map { $0.uuidString }) supported=\(isSupported)")
+            // Aqualung/Pelagic sometimes encode model/serial identifiers in manufacturer data or
+            // service data. Logging full raw blobs only for supported devices to avoid noise from
+            // neighbouring Samsung TVs / AirPods.
             if isSupported {
+                if let mfg = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data, !mfg.isEmpty {
+                    let hex = mfg.map { String(format: "%02X", $0) }.joined(separator: " ")
+                    logInfo("  adv manufacturerData (\(mfg.count)b): \(hex)")
+                }
+                if let svcData = advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data] {
+                    for (uuid, blob) in svcData {
+                        let hex = blob.map { String(format: "%02X", $0) }.joined(separator: " ")
+                        logInfo("  adv serviceData[\(uuid.uuidString)] (\(blob.count)b): \(hex)")
+                    }
+                }
+                if let localName = advertisementData[CBAdvertisementDataLocalNameKey] as? String, localName != name {
+                    logInfo("  adv localName='\(localName)' (differs from peripheral.name='\(name)')")
+                }
+                if let txPower = advertisementData[CBAdvertisementDataTxPowerLevelKey] as? NSNumber {
+                    logInfo("  adv txPowerLevel=\(txPower)")
+                }
+                if let isConnectable = advertisementData[CBAdvertisementDataIsConnectable] as? NSNumber {
+                    logInfo("  adv isConnectable=\(isConnectable)")
+                }
                 addDiscoveredPeripheral(peripheral)
             }
         }
@@ -599,6 +629,18 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
 
     public func advertisedServiceUUIDs(for peripheralID: UUID) -> [CBUUID] {
         return advertisedServiceUUIDs[peripheralID] ?? []
+    }
+
+    @objc public func lastRSSI(for peripheralID: UUID) -> Int {
+        return lastAdvertisedRSSI[peripheralID] ?? 0
+    }
+
+    public func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+        if let error = error {
+            logError("didReadRSSI: \(peripheral.name ?? "?") error=\(error.localizedDescription)")
+            return
+        }
+        logInfo("didReadRSSI: \(peripheral.name ?? "?") rssi=\(RSSI)")
     }
 
     // MARK: - CBPeripheral Methods
@@ -674,7 +716,52 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
                 logInfo("  → notifyCharacteristic = \(characteristic.uuid.uuidString)")
                 peripheral.setNotifyValue(true, for: characteristic)
             }
+
+            // Descriptor discovery surfaces the CCCD (0x2902) and any user-description / format
+            // descriptors. Mainly useful to confirm notifications are truly activated (CCCD value
+            // should be 01 00 after setNotifyValue). Logged via didDiscoverDescriptorsFor.
+            peripheral.discoverDescriptors(for: characteristic)
         }
+    }
+
+    public func peripheral(_ peripheral: CBPeripheral, didDiscoverDescriptorsFor characteristic: CBCharacteristic, error: Error?) {
+        if let error = error {
+            logError("didDiscoverDescriptors: char=\(characteristic.uuid.uuidString) err=\(error.localizedDescription)")
+            return
+        }
+        let descriptors = characteristic.descriptors ?? []
+        if descriptors.isEmpty { return }
+        logInfo("descriptors for char \(characteristic.uuid.uuidString): \(descriptors.count)")
+        for desc in descriptors {
+            logInfo("  desc \(desc.uuid.uuidString)")
+            // Reading each descriptor's value surfaces via didUpdateValueFor(descriptor:).
+            peripheral.readValue(for: desc)
+        }
+    }
+
+    public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor descriptor: CBDescriptor, error: Error?) {
+        if let error = error {
+            logError("didUpdateValueFor(desc): \(descriptor.uuid.uuidString) err=\(error.localizedDescription)")
+            return
+        }
+        // CCCD (0x2902) value is 2 bytes: 0x0001 = notifications, 0x0002 = indications, 0x0000 = off.
+        if let data = descriptor.value as? Data {
+            let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+            logInfo("desc value \(descriptor.uuid.uuidString): \(hex)")
+        } else if let num = descriptor.value as? NSNumber {
+            logInfo("desc value \(descriptor.uuid.uuidString): \(num)")
+        } else if let s = descriptor.value as? String {
+            logInfo("desc value \(descriptor.uuid.uuidString): '\(s)'")
+        } else {
+            logInfo("desc value \(descriptor.uuid.uuidString): \(String(describing: descriptor.value))")
+        }
+    }
+
+    // Fires when iOS is ready to accept more writeWithoutResponse writes after the internal
+    // buffer had been full. If a .withoutResponse write silently drops, it's because this
+    // didn't fire before the next write attempt.
+    public func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        logInfo("peripheralIsReady(toSendWriteWithoutResponse): name=\(peripheral.name ?? "?")")
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -687,7 +774,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             return
         }
 
-        let hex = data.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
+        let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
         logInfo("notify \(data.count)b char=\(characteristic.uuid.uuidString): \(hex)")
 
         queue.sync {
