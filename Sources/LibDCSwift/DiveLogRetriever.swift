@@ -238,22 +238,22 @@ public class DiveLogRetriever {
 
                 let deviceName = device.name ?? "Unknown Device"
 
-                // Get device type from stored configuration (user-selected) for consistent fingerprint lookups
-                let storedDevice = DeviceStorage.shared.getStoredDevice(uuid: device.identifier.uuidString)
-                let deviceTypeForFingerprint: String
-                if let stored = storedDevice,
-                   let modelInfo = DeviceConfiguration.supportedModels.first(where: { $0.modelID == stored.model && $0.family == stored.family }) {
-                    deviceTypeForFingerprint = modelInfo.name
-                } else {
-                    deviceTypeForFingerprint = DeviceConfiguration.getDeviceDisplayName(from: deviceName)
-                }
-
+                // Pre-lookup using the same key format as the save path (libdc's own model
+                // string, via devicePtr.pointee.model). Only works if device_open already
+                // populated have_devinfo — on a fresh open it usually hasn't, in which case
+                // the diveCallbackClosure does the lookup once have_devinfo flips to 1.
                 var storedFingerprint: Data? = nil
-                // Try to get fingerprint if we already have device info (from a previous connection)
                 if devicePtr.pointee.have_devinfo != 0 {
                     let serial = String(format: "%08x", devicePtr.pointee.devinfo.serial)
                     DeviceStorage.shared.updateDeviceSerial(uuid: device.identifier.uuidString, serial: serial)
-                    storedFingerprint = viewModel.getFingerprint(forDeviceType: deviceTypeForFingerprint, serial: serial)
+                    let deviceType: String
+                    if let modelCStr = devicePtr.pointee.model {
+                        deviceType = String(cString: modelCStr)
+                    } else {
+                        deviceType = deviceName
+                    }
+                    storedFingerprint = viewModel.getFingerprint(forDeviceType: deviceType, serial: serial)
+                    logInfo("🔎 Pre-lookup fingerprint key='\(deviceType)' serial=\(serial) found=\(storedFingerprint != nil)")
                 }
 
                 let context = CallbackContext(
@@ -355,16 +355,14 @@ public class DiveLogRetriever {
                     } else {
                         // Download completed successfully
                         if shouldSaveFingerprint, let lastFP = context.lastFingerprint, let serial = context.deviceSerial {
-                            // Use stored device configuration (user-selected) for consistent fingerprint storage
-                            let deviceType: String
-                            if let stored = DeviceStorage.shared.getStoredDevice(uuid: context.deviceUUID),
-                               let modelInfo = DeviceConfiguration.supportedModels.first(where: { $0.modelID == stored.model && $0.family == stored.family }) {
-                                deviceType = modelInfo.name
-                            } else {
-                                // Fall back to libdivecomputer name or device name
-                                deviceType = context.deviceTypeFromLibDC ?? context.deviceName
-                            }
-                            logInfo("✅ Download completed - \(context.logCount - 1) dive(s) downloaded")
+                            // Use libdc's own model string as the fingerprint key — it's the only
+                            // value that is consistent between the save path here and the in-callback
+                            // lookup path (diveCallbackClosure). The prior implementation saved with
+                            // modelInfo.name (e.g. "Aqualung i300C") but the callback looked up with
+                            // deviceTypeFromLibDC (e.g. "i300C"), so the fingerprint was never found
+                            // on subsequent connects and every download re-read the full memory.
+                            let deviceType = context.deviceTypeFromLibDC ?? context.deviceName
+                            logInfo("✅ Download completed - \(context.logCount - 1) dive(s) downloaded, fingerprint key='\(deviceType)' serial=\(serial)")
                             viewModel.saveFingerprint(lastFP, deviceType: deviceType, serial: serial)
                             viewModel.finalizeDiveNumbering()  // Sort by date and renumber (oldest = #1)
                             viewModel.updateProgress(.completed)

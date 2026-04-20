@@ -72,7 +72,15 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     private var writeCharacteristic: CBCharacteristic?
     private var notifyCharacteristic: CBCharacteristic?
     private var receivedData: Data = Data()
-    private let queue = DispatchQueue(label: "com.blemanager.queue")
+    // Dedicated queue for CoreBluetooth delegate callbacks. Setting this on the
+    // CBCentralManager means BLE notifications don't compete with the RN JS thread
+    // for main-queue time during a bulk download, which was delaying some
+    // notifications past the BLE connection interval and costing us radio slots.
+    private let bleDelegateQueue = DispatchQueue(label: "com.livedog.ble.delegate", qos: .userInitiated)
+    // NSLock replaces a DispatchQueue.sync — the critical section is a single
+    // `receivedData.append`, so a lock is ~10–50× cheaper than a dispatch round trip
+    // and it's executed thousands of times during a download.
+    private let receivedDataLock = NSLock()
     private let dataAvailableSemaphore = DispatchSemaphore(value: 0) // Signals when new data arrives
     private let frameMarker: UInt8 = 0x7E
     private var _deviceDataPtr: UnsafeMutablePointer<device_data_t>?
@@ -129,7 +137,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     // MARK: - Initialization
     private override init() {
         super.init()
-        centralManager = CBCentralManager(delegate: self, queue: nil)
+        centralManager = CBCentralManager(delegate: self, queue: bleDelegateQueue)
     }
     
     // MARK: - Service Discovery
@@ -222,27 +230,21 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     
     // MARK: - Data Handling
     private func findNextCompleteFrame() -> Data? {
-        var frameToReturn: Data? = nil
-        
-        queue.sync {
-            guard let startIndex = receivedData.firstIndex(of: frameMarker) else {
-                return
-            }
-            
-            let afterStart = receivedData.index(after: startIndex)
-            guard afterStart < receivedData.count,
-                  let endIndex = receivedData[afterStart...].firstIndex(of: frameMarker) else {
-                return
-            }
-            
-            let frameEndIndex = receivedData.index(after: endIndex)
-            let frame = receivedData[startIndex..<frameEndIndex]
-            
-            receivedData.removeSubrange(startIndex..<frameEndIndex)
-            frameToReturn = Data(frame)
+        receivedDataLock.lock()
+        defer { receivedDataLock.unlock() }
+
+        guard let startIndex = receivedData.firstIndex(of: frameMarker) else {
+            return nil
         }
-        
-        return frameToReturn
+        let afterStart = receivedData.index(after: startIndex)
+        guard afterStart < receivedData.count,
+              let endIndex = receivedData[afterStart...].firstIndex(of: frameMarker) else {
+            return nil
+        }
+        let frameEndIndex = receivedData.index(after: endIndex)
+        let frame = Data(receivedData[startIndex..<frameEndIndex])
+        receivedData.removeSubrange(startIndex..<frameEndIndex)
+        return frame
     }
     
     @objc public func write(_ data: Data!) -> Bool {
@@ -287,13 +289,13 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
         while Date().timeIntervalSince(startTime) < timeout {
             var outData: Data?
 
-            queue.sync {
-                if !receivedData.isEmpty {
-                    let amount = min(requestedInt, receivedData.count)
-                    outData = receivedData.prefix(amount)
-                    receivedData.removeSubrange(0..<amount)
-                }
+            receivedDataLock.lock()
+            if !receivedData.isEmpty {
+                let amount = min(requestedInt, receivedData.count)
+                outData = receivedData.prefix(amount)
+                receivedData.removeSubrange(0..<amount)
             }
+            receivedDataLock.unlock()
 
             if let data = outData {
                 if verbose {
@@ -353,11 +355,9 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             self.isPeripheralReady = false
             self.connectedDevice = nil
         }
-        queue.sync {
-            if !receivedData.isEmpty {
-                receivedData.removeAll()
-            }
-        }
+        receivedDataLock.lock()
+        receivedData.removeAll(keepingCapacity: false)
+        receivedDataLock.unlock()
 
         // Drain and signal semaphore to unblock any waiting reads and clear stale signals
         while dataAvailableSemaphore.wait(timeout: .now()) == .success {
@@ -789,18 +789,19 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             return
         }
 
-        let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        logInfo("notify \(data.count)b char=\(characteristic.uuid.uuidString): \(hex)")
-
-        queue.sync {
-            // Append new data to our buffer immediately
-            receivedData.append(data)
-        }
-
-        // Signal that data is available - wake up any waiting read
+        // Hot path — runs once per BLE notification (~6600 times per bulk download).
+        // Keep it absolutely minimal; the verbose trace is gated so we don't hex-format
+        // + log every 20-byte frame through the RN bridge.
+        receivedDataLock.lock()
+        receivedData.append(data)
+        receivedDataLock.unlock()
         dataAvailableSemaphore.signal()
 
-        updateTransferStats(data.count)
+        if CoreBluetoothManager.verboseLogging {
+            let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+            logInfo("notify \(data.count)b char=\(characteristic.uuid.uuidString): \(hex)")
+            updateTransferStats(data.count)
+        }
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {

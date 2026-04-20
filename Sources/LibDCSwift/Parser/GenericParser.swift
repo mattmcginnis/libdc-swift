@@ -447,12 +447,27 @@ public class GenericParser {
             throw ParserError.invalidParameters
         }
         
+        // Prefer the dive header's own DIVETIME field over our sample-derived
+        // maxTime. On devices with coarse sampling intervals (i300C samples every
+        // ~30s, per the DiverLog+ rate screen) the last profile sample can land
+        // well before the actual end-of-dive, producing bogus "1 minute" durations
+        // for anything shorter than ~60s. The header value is the authoritative
+        // duration recorded by the dive computer itself.
+        // DC_FIELD_DIVETIME is documented as returning the dive time in seconds.
+        let headerDivetime: TimeInterval?
+        if let seconds: UInt32 = getField(parser, type: DC_FIELD_DIVETIME) {
+            headerDivetime = TimeInterval(seconds)
+        } else {
+            headerDivetime = nil
+        }
+        let finalDivetime = headerDivetime ?? wrapper.data.maxTime
+
         return DiveData(
             number: diveNumber,
             datetime: date,
             maxDepth: wrapper.data.maxDepth,
             avgDepth: wrapper.calculateAverageDepth(),
-            divetime: wrapper.data.maxTime,
+            divetime: finalDivetime,
             temperature: wrapper.data.tempMinimum,
             profile: wrapper.data.profile,
             tankPressure: wrapper.data.pressure.map { $0.value },
