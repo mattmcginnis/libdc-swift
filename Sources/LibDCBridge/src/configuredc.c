@@ -186,6 +186,13 @@ dc_status_t ble_packet_open(dc_iostream_t **iostream, dc_context_t *context, con
     // Initialize the Swift BLE manager singletons
     initializeBLEManager();
 
+    // Install the libdivecomputer log forwarder now that bleManager is non-nil.
+    // open_ble_device also calls installLibDCLogger right after dc_context_new, but at
+    // that point bleManager is still nil (set by initializeBLEManager), so the success
+    // blog() call silently drops. Calling again here guarantees the logger is wired up
+    // before any libdc-internal code (oceanic_atom2, etc.) starts emitting messages.
+    installLibDCLogger(context);
+
     // Enforce post-close cooldown before any new connection attempt.
     // This is a last-resort guard: the fix in open_ble_device_with_identification
     // should prevent double-opens, but if any code path bypasses it this check

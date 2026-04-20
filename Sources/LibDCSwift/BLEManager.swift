@@ -700,14 +700,19 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             logInfo("  char \(characteristic.uuid.uuidString): [\(propStrs.joined(separator: ","))]")
 
             if isWriteCharacteristic(characteristic) {
-                // Prefer the dedicated write channel (has .writeWithoutResponse) over
-                // a combined read/write/notify characteristic. Only upgrade if the new
-                // candidate has .writeWithoutResponse and the current one does not.
-                let hasNoRsp = characteristic.properties.contains(.writeWithoutResponse)
-                let currentHasNoRsp = writeCharacteristic?.properties.contains(.writeWithoutResponse) ?? false
-                if writeCharacteristic == nil || (hasNoRsp && !currentHasNoRsp) {
+                // Prefer a characteristic that combines write AND notify/indicate — the classic
+                // "serial endpoint" pattern used by Pelagic/Oceanic BLE bridges (e.g. i300C),
+                // where the device expects protocol commands on the same characteristic it
+                // streams responses on. Previously the selector preferred .writeWithoutResponse,
+                // which routed us to a separate write-only char that the device ignores.
+                let thisHasNotify = characteristic.properties.contains(.notify) ||
+                                    characteristic.properties.contains(.indicate)
+                let currentHasNotify = writeCharacteristic.map {
+                    $0.properties.contains(.notify) || $0.properties.contains(.indicate)
+                } ?? false
+                if writeCharacteristic == nil || (thisHasNotify && !currentHasNotify) {
                     writeCharacteristic = characteristic
-                    logInfo("  → writeCharacteristic = \(characteristic.uuid.uuidString)")
+                    logInfo("  → writeCharacteristic = \(characteristic.uuid.uuidString) (hasNotify=\(thisHasNotify))")
                 }
             }
 
