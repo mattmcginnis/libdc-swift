@@ -147,14 +147,20 @@ public class DiveLogRetriever {
                 dataSize: Int(size)
             )
             
-            DispatchQueue.main.async {
-                context.viewModel.appendDives([diveData])
-                context.viewModel.updateProgress(count: context.logCount)
-            }
-            
+            // IMPORTANT: appendDives() and updateProgress() each internally do a
+            // DispatchQueue.main.async, so just call them directly from the retrieval
+            // thread. The previous wrapper here caused a double-dispatch: this outer
+            // block ran on main, which enqueued ANOTHER main block for the actual
+            // append — and meanwhile the completion handler (also a single main.async)
+            // ran BEFORE those nested appends executed. Result: completion read an
+            // empty `viewModel.dives`, reported "0 dives imported" to the UI, and
+            // nothing got saved to WatermelonDB even though the download succeeded.
+            context.viewModel.appendDives([diveData])
+            context.viewModel.updateProgress(count: context.logCount)
+
             context.hasNewDives = true
             context.logCount += 1
-            return 1  
+            return 1
         } catch {
             logError("❌ Failed to parse dive #\(context.logCount): \(error)")
             return 1 
