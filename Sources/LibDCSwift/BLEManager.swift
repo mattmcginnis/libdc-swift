@@ -137,7 +137,12 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     // MARK: - Initialization
     private override init() {
         super.init()
-        centralManager = CBCentralManager(delegate: self, queue: bleDelegateQueue)
+        // Stayed on the main queue intentionally — several @Published properties
+        // are mutated from delegate callbacks and downstream Combine sinks in the
+        // host app assume main-thread observation. Moving to a background queue
+        // caused subtle state races during connect. The per-packet overhead that
+        // motivated the move is now addressed by NSLock + gated logging below.
+        centralManager = CBCentralManager(delegate: self, queue: nil)
     }
     
     // MARK: - Service Discovery
