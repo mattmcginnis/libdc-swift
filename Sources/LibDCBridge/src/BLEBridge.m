@@ -5,6 +5,10 @@
 
 static id<CoreBluetoothManagerProtocol> bleManager = nil;
 
+// Forward decl so ble_can_connect_now (and other early-file users) can call blog.
+// Definition is further down alongside the rest of the logging helpers.
+static void blog(id<CoreBluetoothManagerProtocol> mgr, NSString *fmt, ...) NS_FORMAT_FUNCTION(2,3);
+
 // C-level reconnect cooldown — set on every close path, checked in ble_packet_open.
 // Protects against rapid double-connection that can brick dive computers.
 static volatile uint64_t g_lastCloseAbsTime = 0;
@@ -37,7 +41,6 @@ static void ble_record_close(id<CoreBluetoothManagerProtocol> manager) {
 }
 
 // Routes a log message to both NSLog (Xcode console) and the in-app BLE log viewer.
-static void blog(id<CoreBluetoothManagerProtocol> mgr, NSString *fmt, ...) NS_FORMAT_FUNCTION(2,3);
 static void blog(id<CoreBluetoothManagerProtocol> mgr, NSString *fmt, ...) {
     va_list args;
     va_start(args, fmt);
