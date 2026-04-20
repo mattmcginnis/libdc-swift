@@ -31,7 +31,12 @@ let package = Package(
             cSettings: [
                 .headerSearchPath("include/libdivecomputer"),
                 .headerSearchPath("src"),
-                .define("HAVE_PTHREAD_H")
+                .define("HAVE_PTHREAD_H"),
+                // Without this define, dc_context_log / dc_context_hexdump are compiled to
+                // no-ops and the installed logfunc callback never fires. Without those logs
+                // we have zero visibility into libdc's protocol-level reasoning (oceanic_atom2
+                // retries, CRC failures, unexpected packet framing, etc.).
+                .define("ENABLE_LOGGING")
             ]
         ),
         .target(

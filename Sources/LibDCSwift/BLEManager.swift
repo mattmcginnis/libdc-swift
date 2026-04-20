@@ -700,19 +700,17 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             logInfo("  char \(characteristic.uuid.uuidString): [\(propStrs.joined(separator: ","))]")
 
             if isWriteCharacteristic(characteristic) {
-                // Prefer a characteristic that combines write AND notify/indicate — the classic
-                // "serial endpoint" pattern used by Pelagic/Oceanic BLE bridges (e.g. i300C),
-                // where the device expects protocol commands on the same characteristic it
-                // streams responses on. Previously the selector preferred .writeWithoutResponse,
-                // which routed us to a separate write-only char that the device ignores.
-                let thisHasNotify = characteristic.properties.contains(.notify) ||
-                                    characteristic.properties.contains(.indicate)
-                let currentHasNotify = writeCharacteristic.map {
-                    $0.properties.contains(.notify) || $0.properties.contains(.indicate)
-                } ?? false
-                if writeCharacteristic == nil || (thisHasNotify && !currentHasNotify) {
+                // Prefer a dedicated write channel with .writeWithoutResponse. Evidence from
+                // Aqualung i300C (log 2026-04-19 22:58): writing to the combined write+notify
+                // char (A60B8E5C-...-9764) returned ATT error 0x80 (application reject). The
+                // device's BLE bridge has application-layer policy that only accepts protocol
+                // writes on the writeNoRsp-capable char (6606AB42-...). Sticking with the
+                // original selector.
+                let hasNoRsp = characteristic.properties.contains(.writeWithoutResponse)
+                let currentHasNoRsp = writeCharacteristic?.properties.contains(.writeWithoutResponse) ?? false
+                if writeCharacteristic == nil || (hasNoRsp && !currentHasNoRsp) {
                     writeCharacteristic = characteristic
-                    logInfo("  → writeCharacteristic = \(characteristic.uuid.uuidString) (hasNotify=\(thisHasNotify))")
+                    logInfo("  → writeCharacteristic = \(characteristic.uuid.uuidString)")
                 }
             }
 
