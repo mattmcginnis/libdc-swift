@@ -268,6 +268,7 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
         logInfo("readDataPartial: start requested=\(requestedInt) bufSize=\(receivedData.count)")
 
         var lastLog = Date()
+        var polledReadChars = false
         while Date().timeIntervalSince(startTime) < timeout {
             var outData: Data?
 
@@ -289,8 +290,17 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
             if result == .success {
                 logInfo("readDataPartial: semaphore signaled — bufSize=\(receivedData.count)")
             }
+            let elapsedSec = Date().timeIntervalSince(startTime)
+            // Once, after 3s of silence, actively poll every [read] char in the chosen service.
+            // Some BLE stacks on dive computers post response data to a read-only characteristic
+            // instead of sending notifications — without this probe we'd never see it.
+            // Values surface via peripheral.didUpdateValueFor, which we already log.
+            if !polledReadChars && elapsedSec >= 3.0 {
+                polledReadChars = true
+                pollReadableCharsForDiagnostic()
+            }
             if Date().timeIntervalSince(lastLog) >= 1.0 {
-                let elapsed = String(format: "%.1f", Date().timeIntervalSince(startTime))
+                let elapsed = String(format: "%.1f", elapsedSec)
                 logInfo("readDataPartial: waiting… elapsed=\(elapsed)s bufSize=\(receivedData.count)")
                 lastLog = Date()
             }
@@ -298,6 +308,23 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
 
         logError("readDataPartial: TIMEOUT after 10s — no data received")
         return nil
+    }
+
+    /// Fire off explicit reads on every [read] characteristic in the active service.
+    /// Diagnostic only — output surfaces via didUpdateValueFor. Does not consume buffered data.
+    private func pollReadableCharsForDiagnostic() {
+        guard let peripheral = self.peripheral,
+              let service = self.preferredService,
+              let characteristics = service.characteristics else {
+            logInfo("pollReadableChars: no peripheral/service — skipping diagnostic")
+            return
+        }
+        let readable = characteristics.filter { $0.properties.contains(.read) }
+        logInfo("pollReadableChars: DIAGNOSTIC — reading \(readable.count) [read] chars (handshake silent for 3s)")
+        for char in readable {
+            logInfo("pollReadableChars: issuing readValue for \(char.uuid.uuidString)")
+            peripheral.readValue(for: char)
+        }
     }
     
     // MARK: - Device Management
@@ -506,6 +533,12 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
     
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         logInfo("didConnect: name=\(peripheral.name ?? "?") id=\(peripheral.identifier) state=\(peripheral.state.rawValue)")
+        // Log negotiated MTU for both write types — if a 14-byte handshake silently truncates,
+        // this is where we'd catch it. iOS typically negotiates >= 185 bytes, but cheap BLE
+        // stacks on dive computers sometimes report as low as 20.
+        let mtuWithRsp = peripheral.maximumWriteValueLength(for: .withResponse)
+        let mtuNoRsp = peripheral.maximumWriteValueLength(for: .withoutResponse)
+        logInfo("didConnect: MTU withResponse=\(mtuWithRsp) withoutResponse=\(mtuNoRsp)")
         peripheral.delegate = self
         DispatchQueue.main.async {
             self.isPeripheralReady = true
@@ -670,7 +703,13 @@ public class CoreBluetoothManager: NSObject, CoreBluetoothManagerProtocol, Obser
 
     public func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            logError("Error writing to characteristic: \(error.localizedDescription) (code=\((error as NSError).code) domain=\((error as NSError).domain))")
+            let ns = error as NSError
+            logError("didWriteValueFor: FAILED char=\(characteristic.uuid.uuidString) err=\(error.localizedDescription) code=\(ns.code) domain=\(ns.domain)")
+        } else {
+            // Success confirms the .withResponse write actually made it to the peer's ATT layer.
+            // Absence of this log after ble_write means the write was queued but never ACKed —
+            // typically a silent link drop or wrong write-type.
+            logInfo("didWriteValueFor: OK char=\(characteristic.uuid.uuidString)")
         }
     }
 
