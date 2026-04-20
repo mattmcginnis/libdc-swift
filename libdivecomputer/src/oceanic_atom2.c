@@ -846,12 +846,13 @@ oceanic_atom2_ble_handshake(oceanic_atom2_device_t *device)
 	// Send the command to the dive computer.
 	rc = oceanic_atom2_transfer (device, handshake, sizeof(handshake), ACK, NULL, 0, 0);
 	if (rc != DC_STATUS_SUCCESS) {
-		if (rc == DC_STATUS_UNSUPPORTED) {
-			WARNING (abstract->context, "Bluetooth handshake not supported.");
-			return DC_STATUS_SUCCESS;
-		} else {
-			return rc;
-		}
+		// Why: previously an UNSUPPORTED response here was downgraded to WARN+SUCCESS.
+		// That let the open succeed, reach memory-read commands with the wrong model-
+		// specific layout, and brick Aqualung i300C (all LCD segments latched; required
+		// battery pull). A handshake error here almost always means the caller opened
+		// this device with the wrong model code — refuse to proceed.
+		ERROR (abstract->context, "Bluetooth handshake failed (rc=%d) — refusing to continue.", rc);
+		return DC_STATUS_IO;
 	}
 
 	return DC_STATUS_SUCCESS;
