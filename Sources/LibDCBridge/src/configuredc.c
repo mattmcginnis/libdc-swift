@@ -186,6 +186,14 @@ dc_status_t ble_packet_open(dc_iostream_t **iostream, dc_context_t *context, con
     // Initialize the Swift BLE manager singletons
     initializeBLEManager();
 
+    // Enforce post-close cooldown before any new connection attempt.
+    // This is a last-resort guard: the fix in open_ble_device_with_identification
+    // should prevent double-opens, but if any code path bypasses it this check
+    // ensures we never send a second connection within 3 seconds of a close.
+    if (!ble_can_connect_now()) {
+        return DC_STATUS_IO;
+    }
+
     // Create a BLE object
     ble_object_t *io = createBLEObject();
     if (io == NULL) {

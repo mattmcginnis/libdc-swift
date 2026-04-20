@@ -1,7 +1,39 @@
 #import "BLEBridge.h"
 #import <Foundation/Foundation.h>
+#include <mach/mach_time.h>
 
 static id<CoreBluetoothManagerProtocol> bleManager = nil;
+
+// C-level reconnect cooldown — set on every close path, checked in ble_packet_open.
+// Protects against rapid double-connection that can brick dive computers.
+static volatile uint64_t g_lastCloseAbsTime = 0;
+static const double kReconnectCooldownSec = 3.0;
+
+static double machAbsToSec(uint64_t t) {
+    static mach_timebase_info_data_t info;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ mach_timebase_info(&info); });
+    return (double)t * info.numer / info.denom / 1e9;
+}
+
+bool ble_can_connect_now(void) {
+    uint64_t last = g_lastCloseAbsTime;
+    if (last == 0) return true;
+    uint64_t now = mach_absolute_time();
+    double elapsed = machAbsToSec(now > last ? now - last : 0);
+    if (elapsed < kReconnectCooldownSec) {
+        if (bleManager) {
+            blog(bleManager, @"ble_can_connect_now: BLOCKED — %.2fs since last close (cooldown %.2fs). Protecting device from rapid reconnect.", elapsed, kReconnectCooldownSec);
+        }
+        return false;
+    }
+    return true;
+}
+
+static void ble_record_close(id<CoreBluetoothManagerProtocol> manager) {
+    g_lastCloseAbsTime = mach_absolute_time();
+    [manager close];
+}
 
 // Routes a log message to both NSLog (Xcode console) and the in-app BLE log viewer.
 static void blog(id<CoreBluetoothManagerProtocol> mgr, NSString *fmt, ...) NS_FORMAT_FUNCTION(2,3);
@@ -74,7 +106,7 @@ bool connectToBLEDevice(ble_object_t *io, const char *deviceAddress) {
 
     if (![manager getPeripheralReadyState]) {
         blog(manager, @"connectToBLEDevice: TIMEOUT waiting for peripheral ready (10s)");
-        [manager close];
+        ble_record_close(manager);
         return false;
     }
 
@@ -93,7 +125,7 @@ bool connectToBLEDevice(ble_object_t *io, const char *deviceAddress) {
     success = [manager discoverServices];
     blog(manager, @"connectToBLEDevice: discoverServices returned %s", success ? "YES" : "NO");
     if (!success) {
-        [manager close];
+        ble_record_close(manager);
         return false;
     }
 
@@ -101,7 +133,7 @@ bool connectToBLEDevice(ble_object_t *io, const char *deviceAddress) {
     success = [manager enableNotifications];
     blog(manager, @"connectToBLEDevice: enableNotifications returned %s", success ? "YES" : "NO");
     if (!success) {
-        [manager close];
+        ble_record_close(manager);
         return false;
     }
 
@@ -216,7 +248,7 @@ dc_status_t ble_close(ble_object_t *io) {
     Class cls = NSClassFromString(@"CoreBluetoothManager");
     id<CoreBluetoothManagerProtocol> manager = [cls shared];
     blog(manager, @"ble_close: calling manager.close()");
-    [manager close];
+    ble_record_close(manager);
     blog(manager, @"ble_close: done");
     return DC_STATUS_SUCCESS;
 }

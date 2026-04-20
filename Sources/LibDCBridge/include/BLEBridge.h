@@ -60,6 +60,8 @@ dc_status_t ble_close(ble_object_t *io);
 // BLE setup functions
 void initializeBLEManager(void);
 bool connectToBLEDevice(ble_object_t *io, const char *deviceAddress);
+// Returns false if a reconnect is within the post-close cooldown window
+bool ble_can_connect_now(void);
 bool discoverServices(ble_object_t *io);
 bool enableNotifications(ble_object_t *io);
 
